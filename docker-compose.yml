@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: stashify_postgres
+    environment:
+      POSTGRES_USER: stashify
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: stashify
+    ports:
+      - "5432:5432"
+    volumes:
+      - stashify_pgdata:/var/lib/postgresql/data
+
+volumes:
+  stashify_pgdata:
