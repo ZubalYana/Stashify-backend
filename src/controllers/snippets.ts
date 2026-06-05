@@ -43,3 +43,64 @@ export async function getSnippets(req: Request, res: Response) {
     res.status(500).json({ message: message });
   }
 }
+
+export async function getSnippetById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const snippet = await pool.query(`SELECT * FROM snippets WHERE id = $1`, [
+      id,
+    ]);
+
+    if (snippet.rows.length === 0) {
+      res.status(404).json({ message: "Snippet not found" });
+      return;
+    }
+
+    res.status(200).json({ snippet: snippet.rows[0] });
+  } catch (error) {
+    console.log(error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({ message: message });
+  }
+}
+
+export async function patchSnippetById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { title, description, code, language } = req.body;
+    const newSnippet = await pool.query(
+      `UPDATE snippets SET title = $1, description = $2, code = $3, language = $4, updated_at = NOW() WHERE id = $5 RETURNING *`,
+      [title, description, code, language, id]
+    );
+
+    if (newSnippet.rows.length === 0) {
+      return res.status(404).json({ message: "Snippet not found" });
+    }
+
+    return res.status(200).json({ snippet: newSnippet.rows[0] });
+  } catch (error) {
+    console.log(error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({ message: message });
+  }
+}
+
+export async function deleteSnippetById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const deletedSnippet = await pool.query(
+      `DELETE FROM snippets WHERE id=$1 RETURNING *`,
+      [id]
+    );
+
+    if(deletedSnippet.rows.length === 0){
+      return res.status(404).json({message: 'Snippet to delete not found'});
+    }
+    res.status(200).json({message: `Snippet ${id} deleted successfully`});
+
+  } catch (error) {
+    console.log(error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({ message: message });
+  }
+}
