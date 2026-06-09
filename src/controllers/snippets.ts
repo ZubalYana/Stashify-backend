@@ -1,5 +1,7 @@
 import pool from "../db";
 import type { Request, Response } from "express";
+import geminiAlalysis from '../AI/gemini'
+import type { SnippetAnalysis } from "../types";
 
 export async function createSnippet(req: Request, res: Response) {
   try {
@@ -102,5 +104,23 @@ export async function deleteSnippetById(req: Request, res: Response) {
     console.log(error);
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({ message: message });
+  }
+}
+
+export async function analyzeSnippet(req: Request, res: Response){
+  try{
+    const { code } = req.body;
+    const aiResponse: SnippetAnalysis = await geminiAlalysis(code);
+    
+    if(!aiResponse){
+      res.status(404).json({message: 'Error getting response from AI. Please try again.'});
+      return;
+    }
+
+    res.status(200).json(aiResponse)
+  }catch(error){
+    console.log(error);
+    const message = error instanceof Error? error.message : 'Unknown error';
+    res.status(500).json({message: message});
   }
 }

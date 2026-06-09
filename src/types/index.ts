@@ -34,3 +34,10 @@ export interface SnippetTags{
     snippet_id: number,
     tag_id: number
 }
+
+export interface SnippetAnalysis{
+    title: string,
+    description: string,
+    language: string,
+    tags: string[]
+}
