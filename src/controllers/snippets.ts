@@ -1,29 +1,60 @@
 import pool from "../db";
 import type { Request, Response } from "express";
-import geminiAlalysis from '../AI/gemini'
+import geminiAlalysis from "../AI/gemini";
 import type { SnippetAnalysis } from "../types";
 
 export async function createSnippet(req: Request, res: Response) {
+  const client = await pool.connect();
   try {
-    const { title, description, code, language, user_id } = req.body;
-    if (!title || !description || !code || !language || !user_id) {
+    await client.query("BEGIN");
+    const { title, description, code, language, tags, user_id } = req.body;
+    if (!title || !description || !code || !language || !tags || !user_id) {
       res.status(400).json({ message: "Missed required credentials" });
       return;
     }
-
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO snippets (title, description, code, language, user_id)
       VALUES($1, $2, $3, $4, $5)
       RETURNING *
       `,
       [title, description, code, language, user_id]
     );
+    const snippet_id = result.rows[0].id;
 
+    for (const tag of tags as string[]) {
+      const result = await client.query(
+        `INSERT INTO tags (name)
+        VALUES($1)
+        ON CONFLICT (name) DO NOTHING
+        RETURNING *`,
+        [tag]
+      );
+      let tag_id = result.rows[0]?.id;
+
+      if (!tag_id) {
+        const existing = await client.query(
+          `SELECT id FROM tags WHERE name = $1`,
+          [tag]
+        );
+        tag_id = existing.rows[0].id;
+      }
+
+      await client.query(
+        `
+        INSERT INTO snippet_tags (snippet_id, tag_id) VALUES ($1, $2)`,
+        [snippet_id, tag_id]
+      );
+    }
+
+    await client.query("COMMIT");
     res.status(201).json({ snippet: result.rows[0] });
   } catch (error) {
+    await client.query("ROLLBACK");
     console.log(error); //temporary for debugging
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({ message: message });
+  } finally {
+    client.release();
   }
 }
 
@@ -95,11 +126,10 @@ export async function deleteSnippetById(req: Request, res: Response) {
       [id]
     );
 
-    if(deletedSnippet.rows.length === 0){
-      return res.status(404).json({message: 'Snippet to delete not found'});
+    if (deletedSnippet.rows.length === 0) {
+      return res.status(404).json({ message: "Snippet to delete not found" });
     }
-    res.status(200).json({message: `Snippet ${id} deleted successfully`});
-
+    res.status(200).json({ message: `Snippet ${id} deleted successfully` });
   } catch (error) {
     console.log(error);
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -107,20 +137,22 @@ export async function deleteSnippetById(req: Request, res: Response) {
   }
 }
 
-export async function analyzeSnippet(req: Request, res: Response){
-  try{
+export async function analyzeSnippet(req: Request, res: Response) {
+  try {
     const { code } = req.body;
     const aiResponse: SnippetAnalysis = await geminiAlalysis(code);
-    
-    if(!aiResponse){
-      res.status(404).json({message: 'Error getting response from AI. Please try again.'});
+
+    if (!aiResponse) {
+      res
+        .status(404)
+        .json({ message: "Error getting response from AI. Please try again." });
       return;
     }
 
-    res.status(200).json(aiResponse)
-  }catch(error){
+    res.status(200).json(aiResponse);
+  } catch (error) {
     console.log(error);
-    const message = error instanceof Error? error.message : 'Unknown error';
-    res.status(500).json({message: message});
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({ message: message });
   }
 }
