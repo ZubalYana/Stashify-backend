@@ -62,13 +62,16 @@ export async function getSnippets(req: Request, res: Response) {
   try {
     const { user_id } = req.query;
     const snippets = await pool.query(
-      `SELECT * FROM snippets WHERE user_id = $1`,
+      `SELECT snippets.*, 
+       ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
+       FROM snippets
+       LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
+       LEFT JOIN tags ON snippet_tags.tag_id = tags.id
+       WHERE snippets.user_id = $1
+       GROUP BY snippets.id`,
       [user_id]
     );
-    if (snippets.rows.length === 0) {
-      res.status(404).json({ message: "Snippets not found" });
-      return;
-    }
+
     res.status(200).json({ snippets: snippets.rows });
   } catch (error) {
     console.log(error); //temporary for debugging
