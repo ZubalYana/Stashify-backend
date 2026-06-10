@@ -80,9 +80,18 @@ export async function getSnippets(req: Request, res: Response) {
 export async function getSnippetById(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const snippet = await pool.query(`SELECT * FROM snippets WHERE id = $1`, [
-      id,
-    ]);
+    const snippet = await pool.query(
+      `
+      SELECT 
+      snippets.*,
+      ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
+      FROM snippets
+      LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
+      LEFT JOIN tags ON snippet_tags.tag_id = tags.id
+      WHERE snippets.id = $1
+      GROUP BY snippets.id`,
+      [id]
+    );
 
     if (snippet.rows.length === 0) {
       res.status(404).json({ message: "Snippet not found" });
