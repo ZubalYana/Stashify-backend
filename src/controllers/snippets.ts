@@ -110,23 +110,47 @@ export async function getSnippetById(req: Request, res: Response) {
 }
 
 export async function patchSnippetById(req: Request, res: Response) {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { title, description, code, language } = req.body;
-    const newSnippet = await pool.query(
-      `UPDATE snippets SET title = $1, description = $2, code = $3, language = $4, updated_at = NOW() WHERE id = $5 RETURNING *`,
+    const { title, description, code, language, tags } = req.body;
+
+    await client.query("BEGIN");
+
+    const result = await client.query(
+      `UPDATE snippets SET title=$1, description=$2, code=$3, language=$4, updated_at=NOW()
+       WHERE id=$5 RETURNING *`,
       [title, description, code, language, id]
     );
-
-    if (newSnippet.rows.length === 0) {
+    if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ message: "Snippet not found" });
     }
 
-    return res.status(200).json({ snippet: newSnippet.rows[0] });
+    await client.query(`DELETE FROM snippet_tags WHERE snippet_id = $1`, [id]);
+
+    for (const name of tags) {
+      const tag = await client.query(
+        `INSERT INTO tags (name) VALUES ($1)
+         ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id`,
+        [name]
+      );
+      await client.query(
+        `INSERT INTO snippet_tags (snippet_id, tag_id) VALUES ($1, $2)`,
+        [id, tag.rows[0].id]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    return res.status(200).json({ snippet: { ...result.rows[0], tags } });
   } catch (error) {
-    console.log(error);
+    await client.query("ROLLBACK");
     const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message: message });
+    res.status(500).json({ message });
+  } finally {
+    client.release(); 
   }
 }
 
