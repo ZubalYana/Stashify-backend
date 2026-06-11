@@ -47,7 +47,18 @@ export async function createSnippet(req: Request, res: Response) {
     }
 
     await client.query("COMMIT");
-    res.status(201).json({ snippet: result.rows[0] });
+    const full = await client.query(
+      `SELECT snippets.*, 
+       ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
+       FROM snippets
+       LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
+       LEFT JOIN tags ON snippet_tags.tag_id = tags.id
+       WHERE snippets.id = $1
+       GROUP BY snippets.id`,
+      [snippet_id]
+    );
+
+    res.status(201).json({ snippet: full.rows[0] });
   } catch (error) {
     await client.query("ROLLBACK");
     console.log(error); //temporary for debugging
@@ -144,13 +155,24 @@ export async function patchSnippetById(req: Request, res: Response) {
 
     await client.query("COMMIT");
 
-    return res.status(200).json({ snippet: { ...result.rows[0], tags } });
+    const full = await client.query(
+      `SELECT snippets.*, 
+       ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
+       FROM snippets
+       LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
+       LEFT JOIN tags ON snippet_tags.tag_id = tags.id
+       WHERE snippets.id = $1
+       GROUP BY snippets.id`,
+      [id]
+    );
+
+    res.status(201).json({ snippet: full.rows[0] });
   } catch (error) {
     await client.query("ROLLBACK");
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({ message });
   } finally {
-    client.release(); 
+    client.release();
   }
 }
 
