@@ -1,3 +1,10 @@
+export interface User{
+    id: number, 
+    name: string, 
+    email: string,
+    password: string 
+}
+
 export interface Snippet{
     id: number,
     code: string,
