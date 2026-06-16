@@ -71,16 +71,16 @@ export async function createSnippet(req: Request, res: Response) {
 
 export async function getSnippets(req: Request, res: Response) {
   try {
-    const { user_id } = req.query;
+    const { user_id, searchParams } = req.query;
     const snippets = await pool.query(
       `SELECT snippets.*, 
        ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
        FROM snippets
        LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
        LEFT JOIN tags ON snippet_tags.tag_id = tags.id
-       WHERE snippets.user_id = $1
+       WHERE snippets.user_id = $1 AND ($2::text IS NULL OR snippets.title ILIKE '%' || $2 || '%' OR snippets.description ILIKE '%' || $2 || '%' OR tags.name ILIKE '%' || $2 || '%')
        GROUP BY snippets.id`,
-      [user_id]
+      [user_id, searchParams || null]
     );
 
     res.status(200).json({ snippets: snippets.rows });
