@@ -35,6 +35,7 @@ export async function register(req: Request, res: Response) {
       user: { id: user.id, name: user.name, email: user.email },
     });
   } catch (error) {
+    console.error(error);
     if (error instanceof Error && error.message.includes("unique constraint")) {
       res.status(409).json({ message: "Email already in use" });
       return;
@@ -86,6 +87,7 @@ export async function logIn(req: Request, res: Response) {
       res.status(401).json({ message: "Invalid credentials" });
     }
   } catch (error) {
+    console.error(error);
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({ message: message });
   }
