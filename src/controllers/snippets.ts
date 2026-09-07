@@ -61,7 +61,6 @@ export async function createSnippet(req: Request, res: Response) {
     res.status(201).json({ snippet: full.rows[0] });
   } catch (error) {
     await client.query("ROLLBACK");
-    console.log(error); //temporary for debugging
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({ message: message });
   } finally {
@@ -71,21 +70,39 @@ export async function createSnippet(req: Request, res: Response) {
 
 export async function getSnippets(req: Request, res: Response) {
   try {
-    const { user_id, searchParams } = req.query;
+    const { user_id } = req.query;
+    const rawSearch = req.query.q ?? req.query.search ?? req.query.searchParams;
+    const search =
+      typeof rawSearch === "string" && rawSearch.trim() !== ""
+        ? rawSearch.trim()
+        : null;
+
     const snippets = await pool.query(
       `SELECT snippets.*, 
        ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
        FROM snippets
        LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
        LEFT JOIN tags ON snippet_tags.tag_id = tags.id
-       WHERE snippets.user_id = $1 AND ($2::text IS NULL OR snippets.title ILIKE '%' || $2 || '%' OR snippets.description ILIKE '%' || $2 || '%' OR tags.name ILIKE '%' || $2 || '%')
+       WHERE snippets.user_id = $1
+         AND (
+           $2::text IS NULL
+           OR snippets.title ILIKE '%' || $2 || '%'
+           OR snippets.description ILIKE '%' || $2 || '%'
+           OR snippets.code ILIKE '%' || $2 || '%'
+           OR EXISTS (
+             SELECT 1
+             FROM snippet_tags st
+             JOIN tags t ON st.tag_id = t.id
+             WHERE st.snippet_id = snippets.id
+               AND t.name ILIKE '%' || $2 || '%'
+           )
+         )
        GROUP BY snippets.id`,
-      [user_id, searchParams || null]
+      [user_id, search]
     );
 
     res.status(200).json({ snippets: snippets.rows });
   } catch (error) {
-    console.log(error); //temporary for debugging
     const message = error instanceof Error ? error.message : "Unknown error";
     res.status(500).json({ message: message });
   }
