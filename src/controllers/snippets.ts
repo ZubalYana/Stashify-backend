@@ -7,17 +7,32 @@ export async function createSnippet(req: Request, res: Response) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { title, description, code, language, tags, user_id } = req.body;
+    const { title, description, code, language, tags, user_id, project_id } =
+      req.body;
     if (!title || !description || !code || !language || !tags || !user_id) {
+      await client.query("ROLLBACK");
       res.status(400).json({ message: "Missed required credentials" });
       return;
     }
+
+    if (project_id != null) {
+      const project = await client.query(
+        `SELECT id FROM projects WHERE id = $1 AND user_id = $2`,
+        [project_id, user_id]
+      );
+      if (project.rows.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ message: "Project not found" });
+        return;
+      }
+    }
+
     const result = await client.query(
-      `INSERT INTO snippets (title, description, code, language, user_id)
-      VALUES($1, $2, $3, $4, $5)
+      `INSERT INTO snippets (title, description, code, language, user_id, project_id)
+      VALUES($1, $2, $3, $4, $5, $6)
       RETURNING *
       `,
-      [title, description, code, language, user_id]
+      [title, description, code, language, user_id, project_id ?? null]
     );
     const snippet_id = result.rows[0].id;
 
@@ -70,12 +85,24 @@ export async function createSnippet(req: Request, res: Response) {
 
 export async function getSnippets(req: Request, res: Response) {
   try {
-    const { user_id } = req.query;
+    const { user_id, project_id, unfiled } = req.query;
     const rawSearch = req.query.q ?? req.query.search ?? req.query.searchParams;
     const search =
       typeof rawSearch === "string" && rawSearch.trim() !== ""
         ? rawSearch.trim()
         : null;
+    const unfiledOnly = unfiled === "true" || unfiled === "1";
+    const projectId =
+      typeof project_id === "string" && project_id.trim() !== ""
+        ? Number(project_id)
+        : null;
+
+    if (unfiledOnly && projectId !== null) {
+      res.status(400).json({
+        message: "Use either project_id or unfiled, not both",
+      });
+      return;
+    }
 
     const snippets = await pool.query(
       `SELECT snippets.*, 
@@ -97,8 +124,10 @@ export async function getSnippets(req: Request, res: Response) {
                AND t.name ILIKE '%' || $2 || '%'
            )
          )
+         AND ($3::int IS NULL OR snippets.project_id = $3)
+         AND ($4::boolean IS NOT TRUE OR snippets.project_id IS NULL)
        GROUP BY snippets.id`,
-      [user_id, search]
+      [user_id, search, projectId, unfiledOnly]
     );
 
     res.status(200).json({ snippets: snippets.rows });
@@ -141,7 +170,7 @@ export async function patchSnippetById(req: Request, res: Response) {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { title, description, code, language, tags } = req.body;
+    const { title, description, code, language, tags, project_id } = req.body;
 
     await client.query("BEGIN");
 
@@ -153,6 +182,25 @@ export async function patchSnippetById(req: Request, res: Response) {
     if (result.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ message: "Snippet not found" });
+    }
+
+    if ("project_id" in req.body) {
+      if (project_id != null) {
+        const project = await client.query(
+          `SELECT id FROM projects WHERE id = $1 AND user_id = $2`,
+          [project_id, result.rows[0].user_id]
+        );
+        if (project.rows.length === 0) {
+          await client.query("ROLLBACK");
+          res.status(404).json({ message: "Project not found" });
+          return;
+        }
+      }
+
+      await client.query(
+        `UPDATE snippets SET project_id = $1, updated_at = NOW() WHERE id = $2`,
+        [project_id ?? null, id]
+      );
     }
 
     await client.query(`DELETE FROM snippet_tags WHERE snippet_id = $1`, [id]);

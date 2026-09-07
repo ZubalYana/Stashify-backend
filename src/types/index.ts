@@ -5,6 +5,16 @@ export interface User{
     password: string 
 }
 
+export interface Project {
+    id: number,
+    user_id: number,
+    name: string,
+    description: string | null,
+    created_at: Date,
+    updated_at: Date,
+    snippet_count?: number
+}
+
 export interface Snippet{
     id: number,
     code: string,
@@ -12,6 +22,7 @@ export interface Snippet{
     description: string,
     language: string,
     user_id: number,
+    project_id: number | null,
     created_at: Date
 }
 

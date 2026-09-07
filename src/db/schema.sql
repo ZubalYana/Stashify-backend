@@ -6,9 +6,20 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT NOW() 
 );
 
+CREATE TABLE projects (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (user_id, name)
+);
+
 CREATE TABLE snippets (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
     code TEXT NOT NULL,
     language VARCHAR(50),
     title VARCHAR(255),
