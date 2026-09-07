@@ -2,16 +2,34 @@ import pool from "../db";
 import type { Request, Response } from "express";
 import geminiAlalysis from "../AI/gemini";
 import type { SnippetAnalysis } from "../types";
+import {
+  SNIPPET_WITH_RELATIONS_SQL,
+  fetchSnippetWithRelations,
+} from "../db/snippetSelect";
 
 export async function createSnippet(req: Request, res: Response) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { title, description, code, language, tags, user_id, project_id } =
-      req.body;
+    const {
+      title,
+      description,
+      code,
+      language,
+      tags,
+      user_id,
+      project_id,
+      collection_ids,
+    } = req.body;
     if (!title || !description || !code || !language || !tags || !user_id) {
       await client.query("ROLLBACK");
       res.status(400).json({ message: "Missed required credentials" });
+      return;
+    }
+
+    if (collection_ids !== undefined && !Array.isArray(collection_ids)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ message: "collection_ids must be an array" });
       return;
     }
 
@@ -61,19 +79,30 @@ export async function createSnippet(req: Request, res: Response) {
       );
     }
 
-    await client.query("COMMIT");
-    const full = await client.query(
-      `SELECT snippets.*, 
-       ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
-       FROM snippets
-       LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
-       LEFT JOIN tags ON snippet_tags.tag_id = tags.id
-       WHERE snippets.id = $1
-       GROUP BY snippets.id`,
-      [snippet_id]
-    );
+    if (Array.isArray(collection_ids) && collection_ids.length > 0) {
+      const uniqueIds = [...new Set(collection_ids.map(Number))];
+      const owned = await client.query(
+        `SELECT id FROM collections WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [user_id, uniqueIds]
+      );
+      if (owned.rows.length !== uniqueIds.length) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ message: "Collection not found" });
+        return;
+      }
+      for (const collectionId of uniqueIds) {
+        await client.query(
+          `INSERT INTO snippet_collections (snippet_id, collection_id)
+           VALUES ($1, $2)`,
+          [snippet_id, collectionId]
+        );
+      }
+    }
 
-    res.status(201).json({ snippet: full.rows[0] });
+    await client.query("COMMIT");
+    res.status(201).json({
+      snippet: await fetchSnippetWithRelations(snippet_id, client),
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -85,16 +114,22 @@ export async function createSnippet(req: Request, res: Response) {
 
 export async function getSnippets(req: Request, res: Response) {
   try {
-    const { user_id, project_id, unfiled } = req.query;
+    const { user_id, project_id, collection_id, unfiled, uncollected } =
+      req.query;
     const rawSearch = req.query.q ?? req.query.search ?? req.query.searchParams;
     const search =
       typeof rawSearch === "string" && rawSearch.trim() !== ""
         ? rawSearch.trim()
         : null;
     const unfiledOnly = unfiled === "true" || unfiled === "1";
+    const uncollectedOnly = uncollected === "true" || uncollected === "1";
     const projectId =
       typeof project_id === "string" && project_id.trim() !== ""
         ? Number(project_id)
+        : null;
+    const collectionId =
+      typeof collection_id === "string" && collection_id.trim() !== ""
+        ? Number(collection_id)
         : null;
 
     if (unfiledOnly && projectId !== null) {
@@ -104,12 +139,15 @@ export async function getSnippets(req: Request, res: Response) {
       return;
     }
 
+    if (uncollectedOnly && collectionId !== null) {
+      res.status(400).json({
+        message: "Use either collection_id or uncollected, not both",
+      });
+      return;
+    }
+
     const snippets = await pool.query(
-      `SELECT snippets.*, 
-       ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
-       FROM snippets
-       LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
-       LEFT JOIN tags ON snippet_tags.tag_id = tags.id
+      `${SNIPPET_WITH_RELATIONS_SQL}
        WHERE snippets.user_id = $1
          AND (
            $2::text IS NULL
@@ -123,11 +161,29 @@ export async function getSnippets(req: Request, res: Response) {
              WHERE st.snippet_id = snippets.id
                AND t.name ILIKE '%' || $2 || '%'
            )
+           OR EXISTS (
+             SELECT 1
+             FROM snippet_collections sc
+             JOIN collections c ON sc.collection_id = c.id
+             WHERE sc.snippet_id = snippets.id
+               AND c.name ILIKE '%' || $2 || '%'
+           )
          )
          AND ($3::int IS NULL OR snippets.project_id = $3)
          AND ($4::boolean IS NOT TRUE OR snippets.project_id IS NULL)
-       GROUP BY snippets.id`,
-      [user_id, search, projectId, unfiledOnly]
+         AND (
+           $5::int IS NULL OR EXISTS (
+             SELECT 1 FROM snippet_collections sc
+             WHERE sc.snippet_id = snippets.id AND sc.collection_id = $5
+           )
+         )
+         AND (
+           $6::boolean IS NOT TRUE OR NOT EXISTS (
+             SELECT 1 FROM snippet_collections sc
+             WHERE sc.snippet_id = snippets.id
+           )
+         )`,
+      [user_id, search, projectId, unfiledOnly, collectionId, uncollectedOnly]
     );
 
     res.status(200).json({ snippets: snippets.rows });
@@ -141,15 +197,7 @@ export async function getSnippetById(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const snippet = await pool.query(
-      `
-      SELECT 
-      snippets.*,
-      ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
-      FROM snippets
-      LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
-      LEFT JOIN tags ON snippet_tags.tag_id = tags.id
-      WHERE snippets.id = $1
-      GROUP BY snippets.id`,
+      `${SNIPPET_WITH_RELATIONS_SQL} WHERE snippets.id = $1`,
       [id]
     );
 
@@ -170,7 +218,8 @@ export async function patchSnippetById(req: Request, res: Response) {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { title, description, code, language, tags, project_id } = req.body;
+    const { title, description, code, language, tags, project_id, collection_ids } =
+      req.body;
 
     await client.query("BEGIN");
 
@@ -218,20 +267,44 @@ export async function patchSnippetById(req: Request, res: Response) {
       );
     }
 
+    if ("collection_ids" in req.body) {
+      if (!Array.isArray(collection_ids)) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ message: "collection_ids must be an array" });
+        return;
+      }
+
+      await client.query(
+        `DELETE FROM snippet_collections WHERE snippet_id = $1`,
+        [id]
+      );
+
+      if (collection_ids.length > 0) {
+        const uniqueIds = [...new Set(collection_ids.map(Number))];
+        const owned = await client.query(
+          `SELECT id FROM collections WHERE user_id = $1 AND id = ANY($2::int[])`,
+          [result.rows[0].user_id, uniqueIds]
+        );
+        if (owned.rows.length !== uniqueIds.length) {
+          await client.query("ROLLBACK");
+          res.status(404).json({ message: "Collection not found" });
+          return;
+        }
+        for (const collectionId of uniqueIds) {
+          await client.query(
+            `INSERT INTO snippet_collections (snippet_id, collection_id)
+             VALUES ($1, $2)`,
+            [id, collectionId]
+          );
+        }
+      }
+    }
+
     await client.query("COMMIT");
 
-    const full = await client.query(
-      `SELECT snippets.*, 
-       ARRAY_AGG(tags.name) FILTER (WHERE tags.name IS NOT NULL) as tags
-       FROM snippets
-       LEFT JOIN snippet_tags ON snippets.id = snippet_tags.snippet_id
-       LEFT JOIN tags ON snippet_tags.tag_id = tags.id
-       WHERE snippets.id = $1
-       GROUP BY snippets.id`,
-      [id]
-    );
-
-    res.status(201).json({ snippet: full.rows[0] });
+    res.status(201).json({
+      snippet: await fetchSnippetWithRelations(Number(id), client),
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     const message = error instanceof Error ? error.message : "Unknown error";

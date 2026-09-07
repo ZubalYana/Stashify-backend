@@ -26,8 +26,24 @@ export interface Snippet{
     created_at: Date
 }
 
+export interface Collection {
+    id: number,
+    user_id: number,
+    name: string,
+    description: string | null,
+    created_at: Date,
+    updated_at: Date,
+    snippet_count?: number
+}
+
+export interface CollectionRef {
+    id: number,
+    name: string
+}
+
 export interface SnippetWithTags extends Snippet{
     tags: string[],
+    collections: CollectionRef[]
 }
 
 export interface User{

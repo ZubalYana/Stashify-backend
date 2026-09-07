@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import snippetRouter from './routes/snippets';
 import authRouter from './routes/auth';
 import projectRouter from './routes/projects';
+import collectionRouter from './routes/collections';
 
 dotenv.config();
 
@@ -14,6 +15,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/snippets', snippetRouter);
 app.use('/projects', projectRouter);
+app.use('/collections', collectionRouter);
 app.use('/auth', authRouter);
 
 app.listen(PORT, () => {
