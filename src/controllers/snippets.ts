@@ -348,7 +348,21 @@ export async function analyzeSnippet(req: Request, res: Response) {
     res.status(200).json(aiResponse);
   } catch (error) {
     console.log(error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message: message });
+    const raw = error instanceof Error ? error.message : "Unknown error";
+    let message = raw;
+    let status = 500;
+    try {
+      const parsed = JSON.parse(raw);
+      const inner = parsed?.error;
+      if (inner?.message) {
+        message = inner.message;
+        if (typeof inner.code === "number" && inner.code >= 400 && inner.code < 600) {
+          status = inner.code;
+        }
+      }
+    } catch {
+      //keep the raw message
+    }
+    res.status(status).json({ message });
   }
 }

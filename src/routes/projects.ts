@@ -9,10 +9,11 @@ import {
   removeSnippetFromProject,
 } from "../controllers/projects";
 import { requireAuth } from "../middleware/auth";
+import { createLimiter } from "../middleware/rateLimit";
 
 const router = express.Router();
 
-router.post("/", requireAuth, createProject);
+router.post("/", requireAuth, createLimiter, createProject);
 router.get("/", requireAuth, getProjects);
 router.get("/:id", requireAuth, getProjectById);
 router.patch("/:id", requireAuth, patchProjectById);

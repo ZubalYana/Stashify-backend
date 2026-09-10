@@ -9,10 +9,11 @@ import {
   removeSnippetFromCollection,
 } from "../controllers/collections";
 import { requireAuth } from "../middleware/auth";
+import { createLimiter } from "../middleware/rateLimit";
 
 const router = express.Router();
 
-router.post("/", requireAuth, createCollection);
+router.post("/", requireAuth, createLimiter, createCollection);
 router.get("/", requireAuth, getCollections);
 router.get("/:id", requireAuth, getCollectionById);
 router.patch("/:id", requireAuth, patchCollectionById);
