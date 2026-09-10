@@ -6,6 +6,7 @@ import pool from "../db";
 
 const PASSWORD_RULE =
   "Password must be at least 8 characters and include a letter and a number";
+const EMAIL_RULE = "Invalid email format";
 
 function isStrongPassword(password: string): boolean {
   return (
@@ -15,12 +16,23 @@ function isStrongPassword(password: string): boolean {
   );
 }
 
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 export async function register(req: Request, res: Response) {
   try {
-    const { name, email, password } = req.body;
+    const { name, password } = req.body;
+    const email =
+      typeof req.body.email === "string" ? req.body.email.trim() : "";
 
     if (!name || !email || !password) {
       res.status(400).json({ message: "Missing credentials" });
+      return;
+    }
+
+    if (!isValidEmail(email)) {
+      res.status(400).json({ message: EMAIL_RULE });
       return;
     }
 
@@ -54,6 +66,10 @@ export async function register(req: Request, res: Response) {
     console.error(error);
     if (error instanceof Error && error.message.includes("unique constraint")) {
       res.status(409).json({ message: "Email already in use" });
+      return;
+    }
+    if (error instanceof Error && error.message.includes("check constraint")) {
+      res.status(400).json({ message: EMAIL_RULE });
       return;
     }
     const message = error instanceof Error ? error.message : "Unknown Error";
