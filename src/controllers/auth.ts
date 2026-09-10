@@ -4,12 +4,28 @@ import jwt from "jsonwebtoken";
 
 import pool from "../db";
 
+const PASSWORD_RULE =
+  "Password must be at least 8 characters and include a letter and a number";
+
+function isStrongPassword(password: string): boolean {
+  return (
+    password.length >= 8 &&
+    /[A-Za-z]/.test(password) &&
+    /\d/.test(password)
+  );
+}
+
 export async function register(req: Request, res: Response) {
   try {
     const { name, email, password } = req.body;
 
     if (!name || !email || !password) {
       res.status(400).json({ message: "Missing credentials" });
+      return;
+    }
+
+    if (!isStrongPassword(password)) {
+      res.status(400).json({ message: PASSWORD_RULE });
       return;
     }
 
