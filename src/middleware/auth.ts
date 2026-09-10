@@ -1,6 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
+export function getAuthUserId(req: Request): number {
+  return Number(req.user!.user_id);
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.split(" ")[1];
 

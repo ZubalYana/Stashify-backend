@@ -1,12 +1,16 @@
 import pool from "../db";
 import type { Request, Response } from "express";
 import { fetchSnippetWithRelations } from "../db/snippetSelect";
+import { getAuthUserId } from "../middleware/auth";
+
+const INTERNAL_ERROR = "Unknown error";
 
 export async function createCollection(req: Request, res: Response) {
   try {
-    const { name, description, user_id } = req.body;
+    const userId = getAuthUserId(req);
+    const { name, description } = req.body;
 
-    if (!name || !user_id) {
+    if (!name) {
       res.status(400).json({ message: "Missing required credentials" });
       return;
     }
@@ -21,7 +25,7 @@ export async function createCollection(req: Request, res: Response) {
       `INSERT INTO collections (name, description, user_id)
        VALUES ($1, $2, $3)
        RETURNING *`,
-      [trimmedName, description ?? null, user_id]
+      [trimmedName, description ?? null, userId]
     );
 
     res.status(201).json({
@@ -35,19 +39,14 @@ export async function createCollection(req: Request, res: Response) {
       res.status(409).json({ message: "Collection name already in use" });
       return;
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function getCollections(req: Request, res: Response) {
   try {
-    const { user_id } = req.query;
-
-    if (!user_id) {
-      res.status(400).json({ message: "Missing user_id" });
-      return;
-    }
+    const userId = getAuthUserId(req);
 
     const collections = await pool.query(
       `SELECT collections.*,
@@ -58,20 +57,20 @@ export async function getCollections(req: Request, res: Response) {
        WHERE collections.user_id = $1
        GROUP BY collections.id
        ORDER BY collections.created_at DESC`,
-      [user_id]
+      [userId]
     );
 
     res.status(200).json({ collections: collections.rows });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function getCollectionById(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { user_id } = req.query;
+    const userId = getAuthUserId(req);
 
     const collection = await pool.query(
       `SELECT collections.*,
@@ -79,10 +78,9 @@ export async function getCollectionById(req: Request, res: Response) {
        FROM collections
        LEFT JOIN snippet_collections
          ON snippet_collections.collection_id = collections.id
-       WHERE collections.id = $1
-         AND ($2::int IS NULL OR collections.user_id = $2)
+       WHERE collections.id = $1 AND collections.user_id = $2
        GROUP BY collections.id`,
-      [id, user_id || null]
+      [id, userId]
     );
 
     if (collection.rows.length === 0) {
@@ -92,15 +90,16 @@ export async function getCollectionById(req: Request, res: Response) {
 
     res.status(200).json({ collection: collection.rows[0] });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function patchCollectionById(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { name, description, user_id } = req.body;
+    const userId = getAuthUserId(req);
+    const { name, description } = req.body;
 
     if (name !== undefined && String(name).trim() === "") {
       res.status(400).json({ message: "Collection name cannot be empty" });
@@ -112,14 +111,13 @@ export async function patchCollectionById(req: Request, res: Response) {
        SET name = COALESCE($1, name),
            description = COALESCE($2, description),
            updated_at = NOW()
-       WHERE id = $3
-         AND ($4::int IS NULL OR user_id = $4)
+       WHERE id = $3 AND user_id = $4
        RETURNING *`,
       [
         name !== undefined ? String(name).trim() : null,
         description !== undefined ? description : null,
         id,
-        user_id ?? null,
+        userId,
       ]
     );
 
@@ -148,22 +146,21 @@ export async function patchCollectionById(req: Request, res: Response) {
       res.status(409).json({ message: "Collection name already in use" });
       return;
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function deleteCollectionById(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const user_id = req.query.user_id ?? req.body?.user_id;
+    const userId = getAuthUserId(req);
 
     const deleted = await pool.query(
       `DELETE FROM collections
-       WHERE id = $1
-         AND ($2::int IS NULL OR user_id = $2)
+       WHERE id = $1 AND user_id = $2
        RETURNING *`,
-      [id, user_id || null]
+      [id, userId]
     );
 
     if (deleted.rows.length === 0) {
@@ -175,15 +172,16 @@ export async function deleteCollectionById(req: Request, res: Response) {
       message: `Collection ${id} deleted successfully`,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function addSnippetToCollection(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { snippet_id, user_id } = req.body;
+    const userId = getAuthUserId(req);
+    const { snippet_id } = req.body;
 
     if (!snippet_id) {
       res.status(400).json({ message: "Missing snippet_id" });
@@ -191,8 +189,8 @@ export async function addSnippetToCollection(req: Request, res: Response) {
     }
 
     const collection = await pool.query(
-      `SELECT * FROM collections WHERE id = $1 AND ($2::int IS NULL OR user_id = $2)`,
-      [id, user_id ?? null]
+      `SELECT * FROM collections WHERE id = $1 AND user_id = $2`,
+      [id, userId]
     );
 
     if (collection.rows.length === 0) {
@@ -200,19 +198,13 @@ export async function addSnippetToCollection(req: Request, res: Response) {
       return;
     }
 
-    const snippet = await pool.query(`SELECT * FROM snippets WHERE id = $1`, [
-      snippet_id,
-    ]);
+    const snippet = await pool.query(
+      `SELECT * FROM snippets WHERE id = $1 AND user_id = $2`,
+      [snippet_id, userId]
+    );
 
     if (snippet.rows.length === 0) {
       res.status(404).json({ message: "Snippet not found" });
-      return;
-    }
-
-    if (snippet.rows[0].user_id !== collection.rows[0].user_id) {
-      res.status(403).json({
-        message: "Snippet and collection must belong to the same user",
-      });
       return;
     }
 
@@ -225,21 +217,20 @@ export async function addSnippetToCollection(req: Request, res: Response) {
 
     res.status(200).json({ snippet: await fetchSnippetWithRelations(snippet_id) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function removeSnippetFromCollection(req: Request, res: Response) {
   try {
     const { id, snippetId } = req.params;
-    const user_id = req.query.user_id ?? req.body?.user_id;
+    const userId = getAuthUserId(req);
 
     const snippet = await pool.query(
       `SELECT id FROM snippets
-       WHERE id = $1
-         AND ($2::int IS NULL OR user_id = $2)`,
-      [snippetId, user_id || null]
+       WHERE id = $1 AND user_id = $2`,
+      [snippetId, userId]
     );
 
     if (snippet.rows.length === 0) {
@@ -265,7 +256,7 @@ export async function removeSnippetFromCollection(req: Request, res: Response) {
       snippet: await fetchSnippetWithRelations(Number(snippetId)),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }

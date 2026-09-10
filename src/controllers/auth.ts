@@ -72,8 +72,7 @@ export async function register(req: Request, res: Response) {
       res.status(400).json({ message: EMAIL_RULE });
       return;
     }
-    const message = error instanceof Error ? error.message : "Unknown Error";
-    res.status(500).json({ message: message });
+    res.status(500).json({ message: "Unknown error" });
   }
 }
 
@@ -91,7 +90,7 @@ export async function logIn(req: Request, res: Response) {
     ]);
 
     if (result.rows.length === 0) {
-      res.status(404).json({ message: "User not found" });
+      res.status(401).json({ message: "Invalid credentials" });
       return;
     }
 
@@ -120,7 +119,6 @@ export async function logIn(req: Request, res: Response) {
     }
   } catch (error) {
     console.error(error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message: message });
+    res.status(500).json({ message: "Unknown error" });
   }
 }

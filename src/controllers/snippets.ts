@@ -2,26 +2,30 @@ import pool from "../db";
 import type { Request, Response } from "express";
 import geminiAlalysis from "../AI/gemini";
 import type { SnippetAnalysis } from "../types";
+import { getAuthUserId } from "../middleware/auth";
 import {
   SNIPPET_WITH_RELATIONS_SQL,
   fetchSnippetWithRelations,
 } from "../db/snippetSelect";
 
+const INTERNAL_ERROR = "Unknown error";
+const MAX_ANALYZE_CHARS = 50_000;
+
 export async function createSnippet(req: Request, res: Response) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const userId = getAuthUserId(req);
     const {
       title,
       description,
       code,
       language,
       tags,
-      user_id,
       project_id,
       collection_ids,
     } = req.body;
-    if (!title || !description || !code || !language || !tags || !user_id) {
+    if (!title || !description || !code || !language || !tags) {
       await client.query("ROLLBACK");
       res.status(400).json({ message: "Missed required credentials" });
       return;
@@ -36,7 +40,7 @@ export async function createSnippet(req: Request, res: Response) {
     if (project_id != null) {
       const project = await client.query(
         `SELECT id FROM projects WHERE id = $1 AND user_id = $2`,
-        [project_id, user_id]
+        [project_id, userId]
       );
       if (project.rows.length === 0) {
         await client.query("ROLLBACK");
@@ -50,7 +54,7 @@ export async function createSnippet(req: Request, res: Response) {
       VALUES($1, $2, $3, $4, $5, $6)
       RETURNING *
       `,
-      [title, description, code, language, user_id, project_id ?? null]
+      [title, description, code, language, userId, project_id ?? null]
     );
     const snippet_id = result.rows[0].id;
 
@@ -83,7 +87,7 @@ export async function createSnippet(req: Request, res: Response) {
       const uniqueIds = [...new Set(collection_ids.map(Number))];
       const owned = await client.query(
         `SELECT id FROM collections WHERE user_id = $1 AND id = ANY($2::int[])`,
-        [user_id, uniqueIds]
+        [userId, uniqueIds]
       );
       if (owned.rows.length !== uniqueIds.length) {
         await client.query("ROLLBACK");
@@ -105,8 +109,8 @@ export async function createSnippet(req: Request, res: Response) {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message: message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   } finally {
     client.release();
   }
@@ -114,8 +118,8 @@ export async function createSnippet(req: Request, res: Response) {
 
 export async function getSnippets(req: Request, res: Response) {
   try {
-    const { user_id, project_id, collection_id, unfiled, uncollected } =
-      req.query;
+    const userId = getAuthUserId(req);
+    const { project_id, collection_id, unfiled, uncollected } = req.query;
     const rawSearch = req.query.q ?? req.query.search ?? req.query.searchParams;
     const search =
       typeof rawSearch === "string" && rawSearch.trim() !== ""
@@ -183,22 +187,23 @@ export async function getSnippets(req: Request, res: Response) {
              WHERE sc.snippet_id = snippets.id
            )
          )`,
-      [user_id, search, projectId, unfiledOnly, collectionId, uncollectedOnly]
+      [userId, search, projectId, unfiledOnly, collectionId, uncollectedOnly]
     );
 
     res.status(200).json({ snippets: snippets.rows });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message: message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function getSnippetById(req: Request, res: Response) {
   try {
     const { id } = req.params;
+    const userId = getAuthUserId(req);
     const snippet = await pool.query(
-      `${SNIPPET_WITH_RELATIONS_SQL} WHERE snippets.id = $1`,
-      [id]
+      `${SNIPPET_WITH_RELATIONS_SQL} WHERE snippets.id = $1 AND snippets.user_id = $2`,
+      [id, userId]
     );
 
     if (snippet.rows.length === 0) {
@@ -208,9 +213,8 @@ export async function getSnippetById(req: Request, res: Response) {
 
     res.status(200).json({ snippet: snippet.rows[0] });
   } catch (error) {
-    console.log(error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message: message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
@@ -218,6 +222,7 @@ export async function patchSnippetById(req: Request, res: Response) {
   const client = await pool.connect();
   try {
     const { id } = req.params;
+    const userId = getAuthUserId(req);
     const { title, description, code, language, tags, project_id, collection_ids } =
       req.body;
 
@@ -225,8 +230,8 @@ export async function patchSnippetById(req: Request, res: Response) {
 
     const result = await client.query(
       `UPDATE snippets SET title=$1, description=$2, code=$3, language=$4, updated_at=NOW()
-       WHERE id=$5 RETURNING *`,
-      [title, description, code, language, id]
+       WHERE id=$5 AND user_id=$6 RETURNING *`,
+      [title, description, code, language, id, userId]
     );
     if (result.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -237,7 +242,7 @@ export async function patchSnippetById(req: Request, res: Response) {
       if (project_id != null) {
         const project = await client.query(
           `SELECT id FROM projects WHERE id = $1 AND user_id = $2`,
-          [project_id, result.rows[0].user_id]
+          [project_id, userId]
         );
         if (project.rows.length === 0) {
           await client.query("ROLLBACK");
@@ -247,8 +252,8 @@ export async function patchSnippetById(req: Request, res: Response) {
       }
 
       await client.query(
-        `UPDATE snippets SET project_id = $1, updated_at = NOW() WHERE id = $2`,
-        [project_id ?? null, id]
+        `UPDATE snippets SET project_id = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3`,
+        [project_id ?? null, id, userId]
       );
     }
 
@@ -283,7 +288,7 @@ export async function patchSnippetById(req: Request, res: Response) {
         const uniqueIds = [...new Set(collection_ids.map(Number))];
         const owned = await client.query(
           `SELECT id FROM collections WHERE user_id = $1 AND id = ANY($2::int[])`,
-          [result.rows[0].user_id, uniqueIds]
+          [userId, uniqueIds]
         );
         if (owned.rows.length !== uniqueIds.length) {
           await client.query("ROLLBACK");
@@ -307,8 +312,8 @@ export async function patchSnippetById(req: Request, res: Response) {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   } finally {
     client.release();
   }
@@ -317,9 +322,10 @@ export async function patchSnippetById(req: Request, res: Response) {
 export async function deleteSnippetById(req: Request, res: Response) {
   try {
     const { id } = req.params;
+    const userId = getAuthUserId(req);
     const deletedSnippet = await pool.query(
-      `DELETE FROM snippets WHERE id=$1 RETURNING *`,
-      [id]
+      `DELETE FROM snippets WHERE id=$1 AND user_id=$2 RETURNING *`,
+      [id, userId]
     );
 
     if (deletedSnippet.rows.length === 0) {
@@ -327,42 +333,35 @@ export async function deleteSnippetById(req: Request, res: Response) {
     }
     res.status(200).json({ message: `Snippet ${id} deleted successfully` });
   } catch (error) {
-    console.log(error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message: message });
+    console.error(error);
+    res.status(500).json({ message: INTERNAL_ERROR });
   }
 }
 
 export async function analyzeSnippet(req: Request, res: Response) {
   try {
     const { code } = req.body;
+    if (typeof code !== "string" || !code.trim()) {
+      res.status(400).json({ message: "Missing code" });
+      return;
+    }
+    if (code.length > MAX_ANALYZE_CHARS) {
+      res.status(413).json({ message: "Code is too long to analyze" });
+      return;
+    }
+
     const aiResponse: SnippetAnalysis = await geminiAlalysis(code);
 
     if (!aiResponse) {
       res
-        .status(404)
+        .status(502)
         .json({ message: "Error getting response from AI. Please try again." });
       return;
     }
 
     res.status(200).json(aiResponse);
   } catch (error) {
-    console.log(error);
-    const raw = error instanceof Error ? error.message : "Unknown error";
-    let message = raw;
-    let status = 500;
-    try {
-      const parsed = JSON.parse(raw);
-      const inner = parsed?.error;
-      if (inner?.message) {
-        message = inner.message;
-        if (typeof inner.code === "number" && inner.code >= 400 && inner.code < 600) {
-          status = inner.code;
-        }
-      }
-    } catch {
-      //keep the raw message
-    }
-    res.status(status).json({ message });
+    console.error(error);
+    res.status(500).json({ message: "Error analyzing snippet" });
   }
 }
